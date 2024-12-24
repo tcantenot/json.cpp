@@ -117,6 +117,7 @@ enum class JsonStatus
     object_key_must_be_string,
     c1_control_code_in_string,
     non_del_c0_control_code_in_string,
+    internal_error_unreachable_code
 };
 
 class Json
