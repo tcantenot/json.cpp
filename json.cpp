@@ -27,6 +27,71 @@
 #include "double-conversion/double-to-string.h"
 #include "double-conversion/string-to-double.h"
 
+
+
+#if defined(_MSC_VER)
+namespace jt {
+
+inline void* DefaultMallocFunc(size_t size, size_t alignment, void* = nullptr)
+{
+    return size > 0 ? _aligned_malloc(size, alignment) : nullptr;
+}
+
+inline void DefaultFreeFunc(void* ptr, void*)
+{
+    _aligned_free(ptr);
+}
+
+}
+#elif defined(__GNUC__) || defined(__clang__)
+#if defined(__x86_64__) || defined(_M_X64) || defined(__wasm_simd128__) || defined(__wasm_relaxed_simd__)
+#include <xmmintrin.h>
+namespace jt {
+
+inline void* DefaultMallocFunc(size_t size, size_t alignment, void*)
+{
+	return size > 0 ? _mm_malloc(size, alignment) : nullptr;
+}
+
+inline void DefaultFreeFunc(void* ptr, void*)
+{
+    _mm_free(ptr);
+}
+
+}
+#else
+namespace jt {
+
+inline void* DefaultMallocFunc(size_t size, size_t alignment, void*)
+{
+    return size > 0 ? aligned_alloc(alignment, size) : nullptr;
+}
+
+inline void DefaultFreeFunc(void* ptr, void*)
+{
+    free(ptr);
+}
+
+}
+#endif
+#endif
+
+namespace jt {
+
+inline void* Malloc(const Context& ctx, size_t size, size_t alignment)
+{
+    MallocFunc m = (ctx.malloc_aligned && ctx.free_aligned) ? ctx.malloc_aligned : DefaultMallocFunc;
+    return m(size, alignment, ctx.userdata);
+}
+
+inline void Free(const Context& ctx, void* ptr)
+{
+    FreeFunc f = (ctx.malloc_aligned && ctx.free_aligned) ? ctx.free_aligned : DefaultFreeFunc;
+    f(ptr, ctx.userdata);
+}
+
+}
+
 #define KEY 1
 #define COMMA 2
 #define COLON 4
@@ -235,7 +300,7 @@ LongToString(char* p, long long x)
     return UlongToString(p, x);
 }
 
-Json::Json(unsigned long value)
+Json::Json(const Context& ctx, unsigned long value): ctx_(ctx)
 {
     if (value <= LLONG_MAX) {
         type_ = Long;
@@ -246,7 +311,7 @@ Json::Json(unsigned long value)
     }
 }
 
-Json::Json(unsigned long long value)
+Json::Json(const Context& ctx, unsigned long long value): ctx_(ctx)
 {
     if (value <= LLONG_MAX) {
         type_ = Long;
@@ -257,18 +322,36 @@ Json::Json(unsigned long long value)
     }
 }
 
-Json::Json(const char* value)
+Json::Json(const Context& ctx, const char* value): ctx_(ctx)
 {
     if (value) {
         type_ = String;
-        new (&string_value) std::string(value);
+        new (&string_value_) std::string(value);
+
+        const size_t len = strlen(value) + 1;
+        string_value__.str = (char*)Malloc(ctx, len, 1);
+        string_value__.len = len;
+        memcpy(string_value__.str, value, len);
+
     } else {
         type_ = Null;
     }
 }
 
-Json::Json(const std::string& value) : type_(String), string_value(value)
+Json::Json(const Context& ctx, const std::string& value): ctx_(ctx), type_(String), string_value_(value)
 {
+    const size_t len = value.size() + 1;
+    string_value__.str = (char*)Malloc(ctx, len, 1);
+    string_value__.len = len;
+    memcpy(string_value__.str, value.data(), len);
+}
+
+Json::Json(const Context& ctx, std::string&& value) : ctx_(ctx), type_(String), string_value_(std::move(value))
+{
+    const size_t len = string_value_.size() + 1;
+    string_value__.str = (char*)Malloc(ctx, len, 1);
+    string_value__.len = len;
+    memcpy(string_value__.str, string_value_.data(), len);
 }
 
 Json::~Json()
@@ -282,7 +365,10 @@ Json::clear()
 {
     switch (type_) {
         case String:
-            string_value.~basic_string();
+            string_value_.~basic_string();
+            Free(ctx_, string_value__.str);
+            string_value__.str = nullptr;
+            string_value__.len = 0;
             break;
         case Array:
             array_value.~vector();
@@ -296,7 +382,7 @@ Json::clear()
     type_ = Null;
 }
 
-Json::Json(const Json& other) : type_(other.type_)
+Json::Json(const Json& other) : ctx_(other.ctx_), type_(other.type_)
 {
     switch (type_) {
         case Null:
@@ -314,7 +400,10 @@ Json::Json(const Json& other) : type_(other.type_)
             double_value = other.double_value;
             break;
         case String:
-            new (&string_value) std::string(other.string_value);
+            new (&string_value_) std::string(other.string_value_);
+            string_value__.str = (char*)Malloc(ctx_, other.string_value__.len, 1);
+            string_value__.len = other.string_value__.len;
+            memcpy(string_value__.str, other.string_value__.str, other.string_value__.len);
             break;
         case Array:
             new (&array_value) std::vector<Json>(other.array_value);
@@ -327,6 +416,7 @@ Json::Json(const Json& other) : type_(other.type_)
     }
 }
 
+// Note: does not copy Context
 Json&
 Json::operator=(const Json& other)
 {
@@ -350,7 +440,10 @@ Json::operator=(const Json& other)
                 double_value = other.double_value;
                 break;
             case String:
-                new (&string_value) std::string(other.string_value);
+                new (&string_value_) std::string(other.string_value_);
+                string_value__.str = (char*)Malloc(ctx_, other.string_value__.len, 1);
+                string_value__.len = other.string_value__.len;
+                memcpy(string_value__.str, other.string_value__.str, other.string_value__.len);
                 break;
             case Array:
                 new (&array_value) std::vector<Json>(other.array_value);
@@ -366,7 +459,7 @@ Json::operator=(const Json& other)
     return *this;
 }
 
-Json::Json(Json&& other) noexcept : type_(other.type_)
+Json::Json(Json&& other) noexcept : ctx_(other.ctx_), type_(other.type_)
 {
     switch (type_) {
         case Null:
@@ -384,7 +477,11 @@ Json::Json(Json&& other) noexcept : type_(other.type_)
             double_value = other.double_value;
             break;
         case String:
-            new (&string_value) std::string(std::move(other.string_value));
+            new (&string_value_) std::string(std::move(other.string_value_));
+            string_value__.str = other.string_value__.str;
+            string_value__.len = other.string_value__.len;
+            other.string_value__.str = nullptr;
+            other.string_value__.len = 0;
             break;
         case Array:
             new (&array_value) std::vector<Json>(std::move(other.array_value));
@@ -422,7 +519,22 @@ Json::operator=(Json&& other) noexcept
                 double_value = other.double_value;
                 break;
             case String:
-                new (&string_value) std::string(std::move(other.string_value));
+                new (&string_value_) std::string(std::move(other.string_value_));
+
+                if(&other.ctx_ == &ctx_) {
+                    string_value__.str = other.string_value__.str;
+                    string_value__.len = other.string_value__.len;
+                    other.string_value__.str = nullptr;
+                    other.string_value__.len = 0;
+                }
+                else {
+                    string_value__.str = (char*)Malloc(ctx_, other.string_value__.len, 1);
+                    string_value__.len = other.string_value__.len;
+                    memcpy(string_value__.str, other.string_value__.str, other.string_value__.len);
+                    Free(other.ctx_, other.string_value__.str);
+                    other.string_value__.str = nullptr;
+                    other.string_value__.len = 0;
+                }
                 break;
             case Array:
                 new (&array_value)
@@ -508,7 +620,7 @@ Json::getString()
 {
     switch (type_) {
         case String:
-            return string_value;
+            return string_value_;
         default:
             abort();
     }
@@ -568,7 +680,8 @@ Json::operator[](size_t index)
     if (!isArray())
         setArray();
     if (index >= array_value.size()) {
-        array_value.resize(index + 1);
+        //array_value.resize(index + 1);
+        array_value.emplace_back(Json{ctx_});
     }
     return array_value[index];
 }
@@ -578,7 +691,13 @@ Json::operator[](const std::string& key)
 {
     if (!isObject())
         setObject();
-    return object_value[key];
+    //return object_value[key];
+
+    auto it = object_value.find(key);
+    if(it != object_value.end())
+        return it->second;
+
+    return object_value.emplace(key, Json{ctx_}).first->second;
 }
 
 std::string
@@ -605,7 +724,7 @@ Json::marshal(std::string& b, bool pretty, int indent) const
             b += "null";
             break;
         case String:
-            stringify(b, string_value);
+            stringify(b, string_value_.c_str());
             break;
         case Bool:
             b += bool_value ? "true" : "false";
@@ -662,7 +781,7 @@ Json::marshal(std::string& b, bool pretty, int indent) const
                     for (int j = 0; j < indent; ++j)
                         b += "  ";
                 }
-                stringify(b, i->first);
+                stringify(b, i->first.c_str());
                 b += ':';
                 if (pretty)
                     b += ' ';
@@ -685,27 +804,28 @@ Json::marshal(std::string& b, bool pretty, int indent) const
 }
 
 void
-Json::stringify(std::string& b, const std::string& s)
+Json::stringify(std::string& b, const char* input)
 {
     b += '"';
-    serialize(b, s);
+    serialize(b, input);
     b += '"';
 }
 
 void
-Json::serialize(std::string& sb, const std::string& s)
+Json::serialize(std::string& sb, const char* input)
 {
     size_t i, j, m;
     wint_t x, a, b;
     unsigned long long w;
-    for (i = 0; i < s.size();) {
-        x = s[i++] & 255;
+    size_t len = strlen(input);
+    for (i = 0; i < len;) {
+        x = input[i++] & 255;
         if (x >= 0300) {
             a = ThomPikeByte(x);
             m = ThomPikeLen(x) - 1;
-            if (i + m <= s.size()) {
+            if (i + m <= len) {
                 for (j = 0;;) {
-                    b = s[i + j] & 0xff;
+                    b = input[i + j] & 0xff;
                     if (!ThomPikeCont(b))
                         break;
                     a = ThomPikeMerge(a, b);
@@ -762,7 +882,7 @@ Json::serialize(std::string& sb, const std::string& s)
 }
 
 Json::Status
-Json::parse(Json& json, const char*& p, const char* e, int context, int depth)
+Json::parse(const Context& ctx, Json& json, const char*& p, const char* e, int context, int depth)
 {
     char w[4];
     long long x;
@@ -916,9 +1036,9 @@ Json::parse(Json& json, const char*& p, const char* e, int context, int depth)
                 if (context & (COLON | COMMA | KEY))
                     goto OnColonCommaKey;
                 json.setArray();
-                Json value;
+                Json value(ctx);
                 for (context = ARRAY, i = 0;;) {
-                    Status status = parse(value, p, e, context, depth - 1);
+                    Status status = parse(ctx, value, p, e, context, depth - 1);
                     if (status == absent_value)
                         return success;
                     if (status != success)
@@ -943,21 +1063,21 @@ Json::parse(Json& json, const char*& p, const char* e, int context, int depth)
                     goto OnColonCommaKey;
                 json.setObject();
                 context = KEY | OBJECT;
-                Json key, value;
+                Json key(ctx), value(ctx);
                 for (;;) {
-                    Status status = parse(key, p, e, context, depth - 1);
+                    Status status = parse(ctx, key, p, e, context, depth - 1);
                     if (status == absent_value)
                         return success;
                     if (status != success)
                         return status;
                     if (!key.isString())
                         return object_key_must_be_string;
-                    status = parse(value, p, e, COLON, depth - 1);
+                    status = parse(ctx, value, p, e, COLON, depth - 1);
                     if (status == absent_value)
                         return object_missing_value;
                     if (status != success)
                         return status;
-                    json.object_value.emplace(std::move(key.string_value),
+                    json.object_value.emplace(std::move(key.string_value_),
                                               std::move(value));
                     context = KEY | COMMA | OBJECT;
                     key.clear();
@@ -965,6 +1085,7 @@ Json::parse(Json& json, const char*& p, const char* e, int context, int depth)
             }
 
             case '"': { // string
+                // TODO: use ctx -> not easy to properly handle memory due to gotos / various returns
                 std::string b;
                 if (context & (COLON | COMMA))
                     goto OnColonComma;
@@ -979,7 +1100,7 @@ Json::parse(Json& json, const char*& p, const char* e, int context, int depth)
 
                         case DQUOTE:
                             json.type_ = String;
-                            new (&json.string_value) std::string(std::move(b));
+                            new (&json.string_value_) std::string(std::move(b));
                             return success;
 
                         case BACKSLASH:
@@ -1215,16 +1336,16 @@ Json::parse(Json& json, const char*& p, const char* e, int context, int depth)
 }
 
 std::pair<Json::Status, Json>
-Json::parse(const std::string& s)
+Json::parse(const Context& ctx, const char* s, size_t len)
 {
     Json::Status s2;
-    std::pair<Json::Status, Json> res;
-    const char* p = s.data();
-    const char* e = s.data() + s.size();
-    res.first = parse(res.second, p, e, 0, DEPTH);
+    std::pair<Json::Status, Json> res = { { }, { ctx } };
+    const char* p = s;
+    const char* e = s + len;
+    res.first = parse(ctx, res.second, p, e, 0, DEPTH);
     if (res.first == Json::success) {
-        Json j2;
-        s2 = parse(j2, p, e, 0, DEPTH);
+        Json j2(ctx);
+        s2 = parse(ctx, j2, p, e, 0, DEPTH);
         if (s2 != absent_value)
             res.first = trailing_content;
     }

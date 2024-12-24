@@ -390,7 +390,9 @@ main()
     for (int i = 0; i < n; ++i) {
         std::string path = base_path;
         path += kParsingTests[i];
-        std::pair<Json::Status, Json> result = Json::parse(slurp(path.c_str()));
+        jt::Context ctx;
+        std::string file_content = slurp(path.c_str());
+        std::pair<Json::Status, Json> result = Json::parse(ctx, file_content.c_str(), file_content.size());
         const char* color = "";
         const char* reason = "";
         switch (kParsingTests[i][0]) {

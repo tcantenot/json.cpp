@@ -22,6 +22,16 @@
 
 namespace jt {
 
+using MallocFunc = void*(*)(size_t size, size_t alignment, void * userdata);
+using FreeFunc = void(*)(void * ptr, void * userdata);
+
+struct Context
+{
+    MallocFunc malloc_aligned = nullptr;
+    FreeFunc free_aligned = nullptr;
+    void * userdata = nullptr;
+};
+
 class Json
 {
   public:
@@ -74,7 +84,27 @@ class Json
         non_del_c0_control_code_in_string,
     };
 
+    struct StringView
+    {
+        char * str;
+        size_t len; // Note: store the '\0' for easier compatibility with API requiring null-terminated strings
+    };
+
+    struct ArrayView
+    {
+        Json * ptr;
+        size_t len;
+    };
+
+    struct HashTrie
+    {
+        HashTrie* children[4];
+        const char* key;
+        Json* value;
+    };
+
   private:
+    const Context & ctx_;
     Type type_;
     union
     {
@@ -82,58 +112,60 @@ class Json
         float float_value;
         double double_value;
         long long long_value;
-        std::string string_value;
+        std::string string_value_;
+        //StringView string_value__; // TODO
         std::vector<Json> array_value;
         std::map<std::string, Json> object_value;
     };
+    StringView string_value__ = { nullptr, 0 }; // TODO_REMOVE: tmp dev
 
   public:
     static const char* StatusToString(Status);
-    static std::pair<Status, Json> parse(const std::string&);
+    static std::pair<Status, Json> parse(const Context& ctx, const char* s, size_t len);
 
     Json(const Json&);
     Json(Json&&) noexcept;
-    Json(unsigned long);
-    Json(unsigned long long);
-    Json(const char*);
-    Json(const std::string&);
+    Json(const Context& ctx, unsigned long);
+    Json(const Context& ctx, unsigned long long);
+    Json(const Context& ctx, const char*);
+    // TODO: remove
+    Json(const Context& ctx, const std::string&);
     ~Json();
 
-    Json(const std::nullptr_t = nullptr) : type_(Null)
+    Json(const Context& ctx, const std::nullptr_t = nullptr) : ctx_(ctx), type_(Null)
     {
     }
 
-    Json(bool value) : type_(Bool), bool_value(value)
+    Json(const Context& ctx, bool value) : ctx_(ctx), type_(Bool), bool_value(value)
     {
     }
 
-    Json(int value) : type_(Long), long_value(value)
+    Json(const Context& ctx, int value) : ctx_(ctx), type_(Long), long_value(value)
     {
     }
 
-    Json(float value) : type_(Float), float_value(value)
+    Json(const Context& ctx, float value) : ctx_(ctx), type_(Float), float_value(value)
     {
     }
 
-    Json(unsigned value) : type_(Long), long_value(value)
+    Json(const Context& ctx, unsigned value) : ctx_(ctx), type_(Long), long_value(value)
     {
     }
 
-    Json(long value) : type_(Long), long_value(value)
+    Json(const Context& ctx, long value) : ctx_(ctx), type_(Long), long_value(value)
     {
     }
 
-    Json(long long value) : type_(Long), long_value(value)
+    Json(const Context& ctx, long long value) : ctx_(ctx), type_(Long), long_value(value)
     {
     }
 
-    Json(double value) : type_(Double), double_value(value)
+    Json(const Context& ctx, double value) : ctx_(ctx), type_(Double), double_value(value)
     {
     }
 
-    Json(std::string&& value) : type_(String), string_value(std::move(value))
-    {
-    }
+    // TODO: remove
+    Json(const Context& ctx, std::string&& value);
 
     Type getType() const
     {
@@ -185,15 +217,20 @@ class Json
         return type_ == Object;
     }
 
+    // TODO: use bool getXXX(XXX& v) const instead of XXX getXXX() const + abort()
     bool getBool() const;
     float getFloat() const;
     double getDouble() const;
     double getNumber() const;
     long long getLong() const;
+
+    // TODO: remove and replace by StringView getString() const
     std::string& getString();
+
     std::vector<Json>& getArray();
     std::map<std::string, Json>& getObject();
 
+    // TODO: replace by: bool contains(const char* str) const
     bool contains(const std::string&) const;
 
     void setArray();
@@ -216,9 +253,9 @@ class Json
   private:
     void clear();
     void marshal(std::string&, bool, int) const;
-    static void stringify(std::string&, const std::string&);
-    static void serialize(std::string&, const std::string&);
-    static Status parse(Json&, const char*&, const char*, int, int);
+    static void stringify(std::string&, const char* input);
+    static void serialize(std::string&, const char* input);
+    static Status parse(const Context& ctx, Json&, const char*&, const char*, int, int);
 };
 
 } // namespace jt
