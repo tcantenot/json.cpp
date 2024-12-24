@@ -881,6 +881,61 @@ Json::serialize(std::string& sb, const char* input)
     }
 }
 
+static inline JsonStatus ReturnColonCommaErrorStatus(int context)
+{
+    if (context & COLON)
+        return JsonStatus::missing_colon;
+    return JsonStatus::missing_comma;
+}
+
+static inline JsonStatus ReturnColonCommaKeyErrorStatus(int context)
+{
+    if (context & KEY)
+        return JsonStatus::object_key_must_be_string;
+    return ReturnColonCommaErrorStatus(context);
+}
+
+static inline int EncodeUTF8(char w[4], int c)
+{
+    int i = 0;
+    if (c <= 0x7f) {
+        w[0] = c;
+        i = 1;
+    } else if (c <= 0x7ff) {
+        w[0] = 0300 | (c >> 6);
+        w[1] = 0200 | (c & 077);
+        i = 2;
+    } else if (c <= 0xffff) {
+        if (IsSurrogate(c)) {
+            c = 0xfffd;
+        }
+        w[0] = 0340 | (c >> 12);
+        w[1] = 0200 | ((c >> 6) & 077);
+        w[2] = 0200 | (c & 077);
+        i = 3;
+    } else if (~(c >> 18) & 007) {
+        w[0] = 0360 | (c >> 18);
+        w[1] = 0200 | ((c >> 12) & 077);
+        w[2] = 0200 | ((c >> 6) & 077);
+        w[3] = 0200 | (c & 077);
+        i = 4;
+    } else {
+        c = 0xfffd;
+        w[0] = 0340 | (c >> 12);
+        w[1] = 0200 | ((c >> 6) & 077);
+        w[2] = 0200 | (c & 077);
+        i = 3;
+    }
+    return i;
+}
+
+// Echo invalid \uXXXX sequences
+// Rather than corrupting UTF-8!
+static inline const char* BadUnicode()
+{
+    return "\\u";
+}
+
 JsonStatus
 Json::parse(const JsonContext& ctx, Json& json, const char*& p, const char* e, int context, int depth)
 {
@@ -919,7 +974,7 @@ Json::parse(const JsonContext& ctx, Json& json, const char*& p, const char* e, i
 
             case 'n': // null
                 if (context & (KEY | COLON | COMMA))
-                    goto OnColonCommaKey;
+                    return ReturnColonCommaKeyErrorStatus(context);
                 if (p + 3 <= e && READ32LE(p - 1) == READ32LE("null")) {
                     p += 3;
                     return JsonStatus::success;
@@ -929,7 +984,7 @@ Json::parse(const JsonContext& ctx, Json& json, const char*& p, const char* e, i
 
             case 'f': // false
                 if (context & (KEY | COLON | COMMA))
-                    goto OnColonCommaKey;
+                    return ReturnColonCommaKeyErrorStatus(context);
                 if (p + 4 <= e && READ32LE(p) == READ32LE("alse")) {
                     json.type_ = JsonType::Bool;
                     json.bool_value = false;
@@ -941,7 +996,7 @@ Json::parse(const JsonContext& ctx, Json& json, const char*& p, const char* e, i
 
             case 't': // true
                 if (context & (KEY | COLON | COMMA))
-                    goto OnColonCommaKey;
+                    return ReturnColonCommaKeyErrorStatus(context);
                 if (p + 3 <= e && READ32LE(p - 1) == READ32LE("true")) {
                     json.type_ = JsonType::Bool;
                     json.bool_value = true;
@@ -954,17 +1009,9 @@ Json::parse(const JsonContext& ctx, Json& json, const char*& p, const char* e, i
             default:
                 return JsonStatus::illegal_character;
 
-            OnColonCommaKey:
-                if (context & KEY)
-                    return JsonStatus::object_key_must_be_string;
-            OnColonComma:
-                if (context & COLON)
-                    return JsonStatus::missing_colon;
-                return JsonStatus::missing_comma;
-
             case '-': // negative
                 if (context & (COLON | COMMA | KEY))
-                    goto OnColonCommaKey;
+                    return ReturnColonCommaKeyErrorStatus(context);
                 if (p < e && isdigit(*p)) {
                     d = -1;
                     break;
@@ -972,23 +1019,37 @@ Json::parse(const JsonContext& ctx, Json& json, const char*& p, const char* e, i
                     return JsonStatus::bad_negative;
                 }
 
-            case '0': // zero or number
+            case '0': { // zero or number
                 if (context & (COLON | COMMA | KEY))
-                    goto OnColonCommaKey;
+                    return ReturnColonCommaKeyErrorStatus(context);
+
+                bool bUseDouble = false;
                 if (p < e) {
                     if (*p == '.') {
                         if (p + 1 == e || !isdigit(p[1]))
                             return JsonStatus::bad_double;
-                        goto UseDubble;
+                        bUseDouble = true;
                     } else if (*p == 'e' || *p == 'E') {
-                        goto UseDubble;
+                        bUseDouble = true;
                     } else if (isdigit(*p)) {
                         return JsonStatus::unexpected_octal;
                     }
                 }
-                json.type_ = JsonType::Long;
-                json.long_value = 0;
-                return JsonStatus::success;
+                if(bUseDouble) {
+                    json.type_ = JsonType::Double;
+                    json.double_value = StringToDouble(a, e - a, &c);
+                    if (c <= 0)
+                        return JsonStatus::bad_double;
+                    if (a + c < e && (a[c] == 'e' || a[c] == 'E'))
+                        return JsonStatus::bad_exponent;
+                    p = a + c;
+                    return JsonStatus::success;
+                } else {
+                    json.type_ = JsonType::Long;
+                    json.long_value = 0;
+                    return JsonStatus::success;
+                }
+            }
 
             case '1':
             case '2':
@@ -998,43 +1059,50 @@ Json::parse(const JsonContext& ctx, Json& json, const char*& p, const char* e, i
             case '6':
             case '7':
             case '8':
-            case '9': // integer
+            case '9': { // integer
                 if (context & (COLON | COMMA | KEY))
-                    goto OnColonCommaKey;
+                    return ReturnColonCommaKeyErrorStatus(context);
+
+                bool bUseDouble = false;
                 for (x = (c - '0') * d; p < e; ++p) {
                     c = *p & 255;
                     if (isdigit(c)) {
                         if (ckd_mul(&x, x, 10) ||
                             ckd_add(&x, x, (c - '0') * d)) {
-                            goto UseDubble;
+                            bUseDouble = true;
+                            break;
                         }
                     } else if (c == '.') {
                         if (p + 1 == e || !isdigit(p[1]))
                             return JsonStatus::bad_double;
-                        goto UseDubble;
+                        bUseDouble = true;
+                        break;
                     } else if (c == 'e' || c == 'E') {
-                        goto UseDubble;
+                        bUseDouble = true;
+                        break;
                     } else {
                         break;
                     }
                 }
-                json.type_ = JsonType::Long;
-                json.long_value = x;
-                return JsonStatus::success;
-
-            UseDubble: // number
-                json.type_ = JsonType::Double;
-                json.double_value = StringToDouble(a, e - a, &c);
-                if (c <= 0)
-                    return JsonStatus::bad_double;
-                if (a + c < e && (a[c] == 'e' || a[c] == 'E'))
-                    return JsonStatus::bad_exponent;
-                p = a + c;
-                return JsonStatus::success;
+                if(bUseDouble) {
+                    json.type_ = JsonType::Double;
+                    json.double_value = StringToDouble(a, e - a, &c);
+                    if (c <= 0)
+                        return JsonStatus::bad_double;
+                    if (a + c < e && (a[c] == 'e' || a[c] == 'E'))
+                        return JsonStatus::bad_exponent;
+                    p = a + c;
+                    return JsonStatus::success;
+                } else {
+                    json.type_ = JsonType::Long;
+                    json.long_value = x;
+                    return JsonStatus::success;
+                }
+            }
 
             case '[': { // Array
                 if (context & (COLON | COMMA | KEY))
-                    goto OnColonCommaKey;
+                    return ReturnColonCommaKeyErrorStatus(context);
                 json.setArray();
                 Json value(ctx);
                 for (context = ARRAY, i = 0;;) {
@@ -1060,7 +1128,7 @@ Json::parse(const JsonContext& ctx, Json& json, const char*& p, const char* e, i
 
             case '{': { // Object
                 if (context & (COLON | COMMA | KEY))
-                    goto OnColonCommaKey;
+                    return ReturnColonCommaKeyErrorStatus(context);
                 json.setObject();
                 context = KEY | OBJECT;
                 Json key(ctx), value(ctx);
@@ -1088,11 +1156,14 @@ Json::parse(const JsonContext& ctx, Json& json, const char*& p, const char* e, i
                 // TODO: use ctx -> not easy to properly handle memory due to gotos / various returns
                 std::string b;
                 if (context & (COLON | COMMA))
-                    goto OnColonComma;
+                    return ReturnColonCommaErrorStatus(context);
+
+                // TODO: replace by while(status == JsonStatus::success && !bDone)
                 for (;;) {
                     if (p >= e)
                         return JsonStatus::unexpected_end_of_string;
-                    switch (kJsonStr[(c = *p++ & 255)]) {
+                    const char k = kJsonStr[(c = *p++ & 255)];
+                    switch (k) {
 
                         case ASCII:
                             b += c;
@@ -1151,6 +1222,8 @@ Json::parse(const JsonContext& ctx, Json& json, const char*& p, const char* e, i
                                         c = A << 12 | B << 8 | C << 4 | D;
                                         if (!IsSurrogate(c)) {
                                             p += 4;
+                                            i = EncodeUTF8(w, c);
+                                            b.append(w, i);
                                         } else if (IsHighSurrogate(c)) {
                                             if (p + 4 + 6 <= e && //
                                                 p[4] == '\\' && //
@@ -1168,49 +1241,22 @@ Json::parse(const JsonContext& ctx, Json& json, const char*& p, const char* e, i
                                                 if (IsLowSurrogate(u)) {
                                                     p += 4 + 6;
                                                     c = MergeUtf16(c, u);
+                                                    i = EncodeUTF8(w, c);
+                                                    b.append(w, i);
                                                 } else {
-                                                    goto BadUnicode;
+                                                    b += BadUnicode();
+                                                    break;
                                                 }
                                             } else {
-                                                goto BadUnicode;
+                                                b += BadUnicode();
+                                                break;
                                             }
                                         } else {
-                                            goto BadUnicode;
+                                            b += BadUnicode();
+                                            break;
                                         }
-                                        // UTF-8
-                                    EncodeUtf8:
-                                        if (c <= 0x7f) {
-                                            w[0] = c;
-                                            i = 1;
-                                        } else if (c <= 0x7ff) {
-                                            w[0] = 0300 | (c >> 6);
-                                            w[1] = 0200 | (c & 077);
-                                            i = 2;
-                                        } else if (c <= 0xffff) {
-                                            if (IsSurrogate(c)) {
-                                            ReplacementCharacter:
-                                                c = 0xfffd;
-                                            }
-                                            w[0] = 0340 | (c >> 12);
-                                            w[1] = 0200 | ((c >> 6) & 077);
-                                            w[2] = 0200 | (c & 077);
-                                            i = 3;
-                                        } else if (~(c >> 18) & 007) {
-                                            w[0] = 0360 | (c >> 18);
-                                            w[1] = 0200 | ((c >> 12) & 077);
-                                            w[2] = 0200 | ((c >> 6) & 077);
-                                            w[3] = 0200 | (c & 077);
-                                            i = 4;
-                                        } else {
-                                            goto ReplacementCharacter;
-                                        }
-                                        b.append(w, i);
                                     } else {
                                         return JsonStatus::invalid_unicode_escape;
-                                    BadUnicode:
-                                        // Echo invalid \uXXXX sequences
-                                        // Rather than corrupting UTF-8!
-                                        b += "\\u";
                                     }
                                     break;
                                 default:
@@ -1224,22 +1270,53 @@ Json::parse(const JsonContext& ctx, Json& json, const char*& p, const char* e, i
                                 c = (c & 037) << 6 | //
                                     (p[0] & 077); //
                                 p += 1;
-                                goto EncodeUtf8;
+                                i = EncodeUTF8(w, c);
+                                b.append(w, i);
+                                break;
                             } else {
                                 return JsonStatus::malformed_utf8;
                             }
 
                         case UTF8_3_E0:
-                            if (p + 2 <= e && //
-                                (p[0] & 0377) < 0240 && //
-                                (p[0] & 0300) == 0200 && //
-                                (p[1] & 0300) == 0200) {
-                                return JsonStatus::overlong_utf8_0x7ff;
+                        case UTF8_3_ED:
+                            if(k == UTF8_3_E0) {
+                                if (p + 2 <= e && //
+                                    (p[0] & 0377) < 0240 && //
+                                    (p[0] & 0300) == 0200 && //
+                                    (p[1] & 0300) == 0200) {
+                                    return JsonStatus::overlong_utf8_0x7ff;
+                                }
+                            } else { // k == UTF8_3_ED
+                                if (p + 2 <= e && //
+                                (p[0] & 0377) >= 0240) { //
+                                    if (p + 5 <= e && //
+                                        (p[0] & 0377) >= 0256 && //
+                                        (p[1] & 0300) == 0200 && //
+                                        (p[2] & 0377) == 0355 && //
+                                        (p[3] & 0377) >= 0260 && //
+                                        (p[4] & 0300) == 0200) { //
+                                        A = (0355 & 017) << 12 | // CESU-8
+                                            (p[0] & 077) << 6 | //
+                                            (p[1] & 077); //
+                                        B = (0355 & 017) << 12 | //
+                                            (p[3] & 077) << 6 | //
+                                            (p[4] & 077); //
+                                        c = ((A - 0xDB80) << 10) + //
+                                            ((B - 0xDC00) + 0x10000); //
+                                        i = EncodeUTF8(w, c);
+                                        b.append(w, i);
+                                        break;
+                                    } else if ((p[0] & 0300) == 0200 && //
+                                               (p[1] & 0300) == 0200) { //
+                                        return JsonStatus::utf16_surrogate_in_utf8;
+                                    } else {
+                                        return JsonStatus::malformed_utf8;
+                                    }
+                                }
                             }
                             // fallthrough
 
                         case UTF8_3:
-                        ThreeUtf8:
                             if (p + 2 <= e && //
                                 (p[0] & 0300) == 0200 && //
                                 (p[1] & 0300) == 0200) { //
@@ -1247,37 +1324,12 @@ Json::parse(const JsonContext& ctx, Json& json, const char*& p, const char* e, i
                                     (p[0] & 077) << 6 | //
                                     (p[1] & 077); //
                                 p += 2;
-                                goto EncodeUtf8;
+                                i = EncodeUTF8(w, c);
+                                b.append(w, i);
+                                break;
                             } else {
                                 return JsonStatus::malformed_utf8;
                             }
-
-                        case UTF8_3_ED:
-                            if (p + 2 <= e && //
-                                (p[0] & 0377) >= 0240) { //
-                                if (p + 5 <= e && //
-                                    (p[0] & 0377) >= 0256 && //
-                                    (p[1] & 0300) == 0200 && //
-                                    (p[2] & 0377) == 0355 && //
-                                    (p[3] & 0377) >= 0260 && //
-                                    (p[4] & 0300) == 0200) { //
-                                    A = (0355 & 017) << 12 | // CESU-8
-                                        (p[0] & 077) << 6 | //
-                                        (p[1] & 077); //
-                                    B = (0355 & 017) << 12 | //
-                                        (p[3] & 077) << 6 | //
-                                        (p[4] & 077); //
-                                    c = ((A - 0xDB80) << 10) + //
-                                        ((B - 0xDC00) + 0x10000); //
-                                    goto EncodeUtf8;
-                                } else if ((p[0] & 0300) == 0200 && //
-                                           (p[1] & 0300) == 0200) { //
-                                    return JsonStatus::utf16_surrogate_in_utf8;
-                                } else {
-                                    return JsonStatus::malformed_utf8;
-                                }
-                            }
-                            goto ThreeUtf8;
 
                         case UTF8_4_F0:
                             if (p + 3 <= e && (p[0] & 0377) < 0220 &&
@@ -1305,7 +1357,9 @@ Json::parse(const JsonContext& ctx, Json& json, const char*& p, const char* e, i
                                 if (A <= 0x10FFFF) {
                                     c = A;
                                     p += 3;
-                                    goto EncodeUtf8;
+                                    i = EncodeUTF8(w, c);
+                                    b.append(w, i);
+                                    break;
                                 } else {
                                     return JsonStatus::utf8_exceeds_utf16_range;
                                 }
