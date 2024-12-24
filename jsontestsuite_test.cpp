@@ -26,6 +26,7 @@
 #define HI_OK "\033[33m" // yellow
 
 using jt::Json;
+using jt::JsonStatus;
 
 static const char* const kParsingTests[] = {
     "i_number_double_huge_neg_exp.json",
@@ -390,15 +391,15 @@ main()
     for (int i = 0; i < n; ++i) {
         std::string path = base_path;
         path += kParsingTests[i];
-        jt::Context ctx;
+        jt::JsonContext ctx;
         std::string file_content = slurp(path.c_str());
-        std::pair<Json::Status, Json> result = Json::parse(ctx, file_content.c_str(), file_content.size());
+        std::pair<JsonStatus, Json> result = Json::parse(ctx, file_content.c_str(), file_content.size());
         const char* color = "";
         const char* reason = "";
         switch (kParsingTests[i][0]) {
             case 'y':
                 // content must be accepted by parsers
-                if (result.first == Json::success) {
+                if (result.first == JsonStatus::success) {
                     color = HI_GOOD;
                     reason = "PASSED";
                 } else {
@@ -409,7 +410,7 @@ main()
                 break;
             case 'n':
                 // content must be rejected by parsers
-                if (result.first != Json::success) {
+                if (result.first != JsonStatus::success) {
                     color = HI_GOOD;
                     reason = "REJECTED";
                 } else {
@@ -421,7 +422,7 @@ main()
             case 'i':
                 // parsers are free to accept or reject content
                 color = HI_OK;
-                if (result.first == Json::success) {
+                if (result.first == JsonStatus::success) {
                     reason = "IMPLEMENTATION_PASS";
                 } else {
                     reason = "IMPLEMENTATION_FAIL";
@@ -431,7 +432,7 @@ main()
                 abort();
         }
         printf("%-70s %s%s%s", kParsingTests[i], color, reason, HI_RESET);
-        if (result.first != Json::success)
+        if (result.first != JsonStatus::success)
             printf(" (%s)", Json::StatusToString(result.first));
         printf("\n");
     }

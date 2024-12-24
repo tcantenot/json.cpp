@@ -78,13 +78,13 @@ inline void DefaultFreeFunc(void* ptr, void*)
 
 namespace jt {
 
-inline void* Malloc(const Context& ctx, size_t size, size_t alignment)
+inline void* Malloc(const JsonContext& ctx, size_t size, size_t alignment)
 {
     MallocFunc m = (ctx.malloc_aligned && ctx.free_aligned) ? ctx.malloc_aligned : DefaultMallocFunc;
     return m(size, alignment, ctx.userdata);
 }
 
-inline void Free(const Context& ctx, void* ptr)
+inline void Free(const JsonContext& ctx, void* ptr)
 {
     FreeFunc f = (ctx.malloc_aligned && ctx.free_aligned) ? ctx.free_aligned : DefaultFreeFunc;
     f(ptr, ctx.userdata);
@@ -300,32 +300,32 @@ LongToString(char* p, long long x)
     return UlongToString(p, x);
 }
 
-Json::Json(const Context& ctx, unsigned long value): ctx_(ctx)
+Json::Json(const JsonContext& ctx, unsigned long value): ctx_(ctx)
 {
     if (value <= LLONG_MAX) {
-        type_ = Long;
+        type_ = JsonType::Long;
         long_value = value;
     } else {
-        type_ = Double;
+        type_ = JsonType::Double;
         double_value = value;
     }
 }
 
-Json::Json(const Context& ctx, unsigned long long value): ctx_(ctx)
+Json::Json(const JsonContext& ctx, unsigned long long value): ctx_(ctx)
 {
     if (value <= LLONG_MAX) {
-        type_ = Long;
+        type_ = JsonType::Long;
         long_value = value;
     } else {
-        type_ = Double;
+        type_ = JsonType::Double;
         double_value = value;
     }
 }
 
-Json::Json(const Context& ctx, const char* value): ctx_(ctx)
+Json::Json(const JsonContext& ctx, const char* value): ctx_(ctx)
 {
     if (value) {
-        type_ = String;
+        type_ = JsonType::String;
         new (&string_value_) std::string(value);
 
         const size_t len = strlen(value) + 1;
@@ -334,11 +334,11 @@ Json::Json(const Context& ctx, const char* value): ctx_(ctx)
         memcpy(string_value__.str, value, len);
 
     } else {
-        type_ = Null;
+        type_ = JsonType::Null;
     }
 }
 
-Json::Json(const Context& ctx, const std::string& value): ctx_(ctx), type_(String), string_value_(value)
+Json::Json(const JsonContext& ctx, const std::string& value): ctx_(ctx), type_(JsonType::String), string_value_(value)
 {
     const size_t len = value.size() + 1;
     string_value__.str = (char*)Malloc(ctx, len, 1);
@@ -346,7 +346,7 @@ Json::Json(const Context& ctx, const std::string& value): ctx_(ctx), type_(Strin
     memcpy(string_value__.str, value.data(), len);
 }
 
-Json::Json(const Context& ctx, std::string&& value) : ctx_(ctx), type_(String), string_value_(std::move(value))
+Json::Json(const JsonContext& ctx, std::string&& value) : ctx_(ctx), type_(JsonType::String), string_value_(std::move(value))
 {
     const size_t len = string_value_.size() + 1;
     string_value__.str = (char*)Malloc(ctx, len, 1);
@@ -356,7 +356,7 @@ Json::Json(const Context& ctx, std::string&& value) : ctx_(ctx), type_(String), 
 
 Json::~Json()
 {
-    if (type_ >= String)
+    if (type_ >= JsonType::String)
         clear();
 }
 
@@ -364,51 +364,51 @@ void
 Json::clear()
 {
     switch (type_) {
-        case String:
+        case JsonType::String:
             string_value_.~basic_string();
             Free(ctx_, string_value__.str);
             string_value__.str = nullptr;
             string_value__.len = 0;
             break;
-        case Array:
+        case JsonType::Array:
             array_value.~vector();
             break;
-        case Object:
+        case JsonType::Object:
             object_value.~map();
             break;
         default:
             break;
     }
-    type_ = Null;
+    type_ = JsonType::Null;
 }
 
 Json::Json(const Json& other) : ctx_(other.ctx_), type_(other.type_)
 {
     switch (type_) {
-        case Null:
+        case JsonType::Null:
             break;
-        case Bool:
+        case JsonType::Bool:
             bool_value = other.bool_value;
             break;
-        case Long:
+        case JsonType::Long:
             long_value = other.long_value;
             break;
-        case Float:
+        case JsonType::Float:
             float_value = other.float_value;
             break;
-        case Double:
+        case JsonType::Double:
             double_value = other.double_value;
             break;
-        case String:
+        case JsonType::String:
             new (&string_value_) std::string(other.string_value_);
             string_value__.str = (char*)Malloc(ctx_, other.string_value__.len, 1);
             string_value__.len = other.string_value__.len;
             memcpy(string_value__.str, other.string_value__.str, other.string_value__.len);
             break;
-        case Array:
+        case JsonType::Array:
             new (&array_value) std::vector<Json>(other.array_value);
             break;
-        case Object:
+        case JsonType::Object:
             new (&object_value) std::map<std::string, Json>(other.object_value);
             break;
         default:
@@ -416,39 +416,39 @@ Json::Json(const Json& other) : ctx_(other.ctx_), type_(other.type_)
     }
 }
 
-// Note: does not copy Context
+// Note: does not copy JsonContext
 Json&
 Json::operator=(const Json& other)
 {
     if (this != &other) {
-        if (type_ >= String)
+        if (type_ >= JsonType::String)
             clear();
         type_ = other.type_;
         switch (type_) {
-            case Null:
+            case JsonType::Null:
                 break;
-            case Bool:
+            case JsonType::Bool:
                 bool_value = other.bool_value;
                 break;
-            case Long:
+            case JsonType::Long:
                 long_value = other.long_value;
                 break;
-            case Float:
+            case JsonType::Float:
                 float_value = other.float_value;
                 break;
-            case Double:
+            case JsonType::Double:
                 double_value = other.double_value;
                 break;
-            case String:
+            case JsonType::String:
                 new (&string_value_) std::string(other.string_value_);
                 string_value__.str = (char*)Malloc(ctx_, other.string_value__.len, 1);
                 string_value__.len = other.string_value__.len;
                 memcpy(string_value__.str, other.string_value__.str, other.string_value__.len);
                 break;
-            case Array:
+            case JsonType::Array:
                 new (&array_value) std::vector<Json>(other.array_value);
                 break;
-            case Object:
+            case JsonType::Object:
                 new (&object_value)
                   std::map<std::string, Json>(other.object_value);
                 break;
@@ -462,63 +462,63 @@ Json::operator=(const Json& other)
 Json::Json(Json&& other) noexcept : ctx_(other.ctx_), type_(other.type_)
 {
     switch (type_) {
-        case Null:
+        case JsonType::Null:
             break;
-        case Bool:
+        case JsonType::Bool:
             bool_value = other.bool_value;
             break;
-        case Long:
+        case JsonType::Long:
             long_value = other.long_value;
             break;
-        case Float:
+        case JsonType::Float:
             float_value = other.float_value;
             break;
-        case Double:
+        case JsonType::Double:
             double_value = other.double_value;
             break;
-        case String:
+        case JsonType::String:
             new (&string_value_) std::string(std::move(other.string_value_));
             string_value__.str = other.string_value__.str;
             string_value__.len = other.string_value__.len;
             other.string_value__.str = nullptr;
             other.string_value__.len = 0;
             break;
-        case Array:
+        case JsonType::Array:
             new (&array_value) std::vector<Json>(std::move(other.array_value));
             break;
-        case Object:
+        case JsonType::Object:
             new (&object_value)
               std::map<std::string, Json>(std::move(other.object_value));
             break;
         default:
             abort();
     }
-    other.type_ = Null;
+    other.type_ = JsonType::Null;
 }
 
 Json&
 Json::operator=(Json&& other) noexcept
 {
     if (this != &other) {
-        if (type_ >= String)
+        if (type_ >= JsonType::String)
             clear();
         type_ = other.type_;
         switch (type_) {
-            case Null:
+            case JsonType::Null:
                 break;
-            case Bool:
+            case JsonType::Bool:
                 bool_value = other.bool_value;
                 break;
-            case Long:
+            case JsonType::Long:
                 long_value = other.long_value;
                 break;
-            case Float:
+            case JsonType::Float:
                 float_value = other.float_value;
                 break;
-            case Double:
+            case JsonType::Double:
                 double_value = other.double_value;
                 break;
-            case String:
+            case JsonType::String:
                 new (&string_value_) std::string(std::move(other.string_value_));
 
                 if(&other.ctx_ == &ctx_) {
@@ -536,18 +536,18 @@ Json::operator=(Json&& other) noexcept
                     other.string_value__.len = 0;
                 }
                 break;
-            case Array:
+            case JsonType::Array:
                 new (&array_value)
                   std::vector<Json>(std::move(other.array_value));
                 break;
-            case Object:
+            case JsonType::Object:
                 new (&object_value)
                   std::map<std::string, Json>(std::move(other.object_value));
                 break;
             default:
                 abort();
         }
-        other.type_ = Null;
+        other.type_ = JsonType::Null;
     }
     return *this;
 }
@@ -556,11 +556,11 @@ double
 Json::getNumber() const
 {
     switch (type_) {
-        case Long:
+        case JsonType::Long:
             return long_value;
-        case Float:
+        case JsonType::Float:
             return float_value;
-        case Double:
+        case JsonType::Double:
             return double_value;
         default:
             abort();
@@ -571,7 +571,7 @@ long long
 Json::getLong() const
 {
     switch (type_) {
-        case Long:
+        case JsonType::Long:
             return long_value;
         default:
             abort();
@@ -582,7 +582,7 @@ bool
 Json::getBool() const
 {
     switch (type_) {
-        case Bool:
+        case JsonType::Bool:
             return bool_value;
         default:
             abort();
@@ -593,9 +593,9 @@ float
 Json::getFloat() const
 {
     switch (type_) {
-        case Float:
+        case JsonType::Float:
             return float_value;
-        case Double:
+        case JsonType::Double:
             return double_value;
         default:
             abort();
@@ -606,9 +606,9 @@ double
 Json::getDouble() const
 {
     switch (type_) {
-        case Float:
+        case JsonType::Float:
             return float_value;
-        case Double:
+        case JsonType::Double:
             return double_value;
         default:
             abort();
@@ -619,7 +619,7 @@ std::string&
 Json::getString()
 {
     switch (type_) {
-        case String:
+        case JsonType::String:
             return string_value_;
         default:
             abort();
@@ -630,7 +630,7 @@ std::vector<Json>&
 Json::getArray()
 {
     switch (type_) {
-        case Array:
+        case JsonType::Array:
             return array_value;
         default:
             abort();
@@ -641,7 +641,7 @@ std::map<std::string, Json>&
 Json::getObject()
 {
     switch (type_) {
-        case Object:
+        case JsonType::Object:
             return object_value;
         default:
             abort();
@@ -651,25 +651,25 @@ Json::getObject()
 void
 Json::setArray()
 {
-    if (type_ >= String)
+    if (type_ >= JsonType::String)
         clear();
-    type_ = Array;
+    type_ = JsonType::Array;
     new (&array_value) std::vector<Json>();
 }
 
 void
 Json::setObject()
 {
-    if (type_ >= String)
+    if (type_ >= JsonType::String)
         clear();
-    type_ = Object;
+    type_ = JsonType::Object;
     new (&object_value) std::map<std::string, Json>();
 }
 
 bool
 Json::contains(const std::string& key) const
 {
-    if (!isObject())
+    if (type_ != JsonType::Object)
         return false;
     return object_value.find(key) != object_value.end();
 }
@@ -677,7 +677,7 @@ Json::contains(const std::string& key) const
 Json&
 Json::operator[](size_t index)
 {
-    if (!isArray())
+    if (type_ != JsonType::Array)
         setArray();
     if (index >= array_value.size()) {
         //array_value.resize(index + 1);
@@ -689,7 +689,7 @@ Json::operator[](size_t index)
 Json&
 Json::operator[](const std::string& key)
 {
-    if (!isObject())
+    if (type_ != JsonType::Object)
         setObject();
     //return object_value[key];
 
@@ -720,21 +720,21 @@ void
 Json::marshal(std::string& b, bool pretty, int indent) const
 {
     switch (type_) {
-        case Null:
+        case JsonType::Null:
             b += "null";
             break;
-        case String:
+        case JsonType::String:
             stringify(b, string_value_.c_str());
             break;
-        case Bool:
+        case JsonType::Bool:
             b += bool_value ? "true" : "false";
             break;
-        case Long: {
+        case JsonType::Long: {
             char buf[64];
             b.append(buf, LongToString(buf, long_value) - buf);
             break;
         }
-        case Float: {
+        case JsonType::Float: {
             char buf[128];
             double_conversion::StringBuilder db(buf, 128);
             kDoubleToJson.ToShortestSingle(float_value, &db);
@@ -742,7 +742,7 @@ Json::marshal(std::string& b, bool pretty, int indent) const
             b += buf;
             break;
         }
-        case Double: {
+        case JsonType::Double: {
             char buf[128];
             double_conversion::StringBuilder db(buf, 128);
             kDoubleToJson.ToShortest(double_value, &db);
@@ -750,7 +750,7 @@ Json::marshal(std::string& b, bool pretty, int indent) const
             b += buf;
             break;
         }
-        case Array: {
+        case JsonType::Array: {
             bool once = false;
             b += '[';
             for (auto i = array_value.begin(); i != array_value.end(); ++i) {
@@ -766,7 +766,7 @@ Json::marshal(std::string& b, bool pretty, int indent) const
             b += ']';
             break;
         }
-        case Object: {
+        case JsonType::Object: {
             bool once = false;
             b += '{';
             for (auto i = object_value.begin(); i != object_value.end(); ++i) {
@@ -881,15 +881,15 @@ Json::serialize(std::string& sb, const char* input)
     }
 }
 
-Json::Status
-Json::parse(const Context& ctx, Json& json, const char*& p, const char* e, int context, int depth)
+JsonStatus
+Json::parse(const JsonContext& ctx, Json& json, const char*& p, const char* e, int context, int depth)
 {
     char w[4];
     long long x;
     const char* a;
     int A, B, C, D, c, d, i, u;
     if (!depth)
-        return depth_exceeded;
+        return JsonStatus::depth_exceeded;
     for (a = p, d = +1; p < e;) {
         switch ((c = *p++ & 255)) {
             case ' ': // spaces
@@ -905,7 +905,7 @@ Json::parse(const Context& ctx, Json& json, const char*& p, const char* e, int c
                     a = p;
                     break;
                 } else {
-                    return unexpected_comma;
+                    return JsonStatus::unexpected_comma;
                 }
 
             case ':': // present only in object after key
@@ -914,7 +914,7 @@ Json::parse(const Context& ctx, Json& json, const char*& p, const char* e, int c
                     a = p;
                     break;
                 } else {
-                    return unexpected_colon;
+                    return JsonStatus::unexpected_colon;
                 }
 
             case 'n': // null
@@ -922,45 +922,45 @@ Json::parse(const Context& ctx, Json& json, const char*& p, const char* e, int c
                     goto OnColonCommaKey;
                 if (p + 3 <= e && READ32LE(p - 1) == READ32LE("null")) {
                     p += 3;
-                    return success;
+                    return JsonStatus::success;
                 } else {
-                    return illegal_character;
+                    return JsonStatus::illegal_character;
                 }
 
             case 'f': // false
                 if (context & (KEY | COLON | COMMA))
                     goto OnColonCommaKey;
                 if (p + 4 <= e && READ32LE(p) == READ32LE("alse")) {
-                    json.type_ = Bool;
+                    json.type_ = JsonType::Bool;
                     json.bool_value = false;
                     p += 4;
-                    return success;
+                    return JsonStatus::success;
                 } else {
-                    return illegal_character;
+                    return JsonStatus::illegal_character;
                 }
 
             case 't': // true
                 if (context & (KEY | COLON | COMMA))
                     goto OnColonCommaKey;
                 if (p + 3 <= e && READ32LE(p - 1) == READ32LE("true")) {
-                    json.type_ = Bool;
+                    json.type_ = JsonType::Bool;
                     json.bool_value = true;
                     p += 3;
-                    return success;
+                    return JsonStatus::success;
                 } else {
-                    return illegal_character;
+                    return JsonStatus::illegal_character;
                 }
 
             default:
-                return illegal_character;
+                return JsonStatus::illegal_character;
 
             OnColonCommaKey:
                 if (context & KEY)
-                    return object_key_must_be_string;
+                    return JsonStatus::object_key_must_be_string;
             OnColonComma:
                 if (context & COLON)
-                    return missing_colon;
-                return missing_comma;
+                    return JsonStatus::missing_colon;
+                return JsonStatus::missing_comma;
 
             case '-': // negative
                 if (context & (COLON | COMMA | KEY))
@@ -969,7 +969,7 @@ Json::parse(const Context& ctx, Json& json, const char*& p, const char* e, int c
                     d = -1;
                     break;
                 } else {
-                    return bad_negative;
+                    return JsonStatus::bad_negative;
                 }
 
             case '0': // zero or number
@@ -978,17 +978,17 @@ Json::parse(const Context& ctx, Json& json, const char*& p, const char* e, int c
                 if (p < e) {
                     if (*p == '.') {
                         if (p + 1 == e || !isdigit(p[1]))
-                            return bad_double;
+                            return JsonStatus::bad_double;
                         goto UseDubble;
                     } else if (*p == 'e' || *p == 'E') {
                         goto UseDubble;
                     } else if (isdigit(*p)) {
-                        return unexpected_octal;
+                        return JsonStatus::unexpected_octal;
                     }
                 }
-                json.type_ = Long;
+                json.type_ = JsonType::Long;
                 json.long_value = 0;
-                return success;
+                return JsonStatus::success;
 
             case '1':
             case '2':
@@ -1010,7 +1010,7 @@ Json::parse(const Context& ctx, Json& json, const char*& p, const char* e, int c
                         }
                     } else if (c == '.') {
                         if (p + 1 == e || !isdigit(p[1]))
-                            return bad_double;
+                            return JsonStatus::bad_double;
                         goto UseDubble;
                     } else if (c == 'e' || c == 'E') {
                         goto UseDubble;
@@ -1018,19 +1018,19 @@ Json::parse(const Context& ctx, Json& json, const char*& p, const char* e, int c
                         break;
                     }
                 }
-                json.type_ = Long;
+                json.type_ = JsonType::Long;
                 json.long_value = x;
-                return success;
+                return JsonStatus::success;
 
             UseDubble: // number
-                json.type_ = Double;
+                json.type_ = JsonType::Double;
                 json.double_value = StringToDouble(a, e - a, &c);
                 if (c <= 0)
-                    return bad_double;
+                    return JsonStatus::bad_double;
                 if (a + c < e && (a[c] == 'e' || a[c] == 'E'))
-                    return bad_exponent;
+                    return JsonStatus::bad_exponent;
                 p = a + c;
-                return success;
+                return JsonStatus::success;
 
             case '[': { // Array
                 if (context & (COLON | COMMA | KEY))
@@ -1038,10 +1038,10 @@ Json::parse(const Context& ctx, Json& json, const char*& p, const char* e, int c
                 json.setArray();
                 Json value(ctx);
                 for (context = ARRAY, i = 0;;) {
-                    Status status = parse(ctx, value, p, e, context, depth - 1);
-                    if (status == absent_value)
-                        return success;
-                    if (status != success)
+                    JsonStatus status = parse(ctx, value, p, e, context, depth - 1);
+                    if (status == JsonStatus::absent_value)
+                        return JsonStatus::success;
+                    if (status != JsonStatus::success)
                         return status;
                     json.array_value.emplace_back(std::move(value));
                     context = ARRAY | COMMA;
@@ -1050,13 +1050,13 @@ Json::parse(const Context& ctx, Json& json, const char*& p, const char* e, int c
 
             case ']':
                 if (context & ARRAY)
-                    return absent_value;
-                return unexpected_end_of_array;
+                    return JsonStatus::absent_value;
+                return JsonStatus::unexpected_end_of_array;
 
             case '}':
                 if (context & OBJECT)
-                    return absent_value;
-                return unexpected_end_of_object;
+                    return JsonStatus::absent_value;
+                return JsonStatus::unexpected_end_of_object;
 
             case '{': { // Object
                 if (context & (COLON | COMMA | KEY))
@@ -1065,17 +1065,17 @@ Json::parse(const Context& ctx, Json& json, const char*& p, const char* e, int c
                 context = KEY | OBJECT;
                 Json key(ctx), value(ctx);
                 for (;;) {
-                    Status status = parse(ctx, key, p, e, context, depth - 1);
-                    if (status == absent_value)
-                        return success;
-                    if (status != success)
+                    JsonStatus status = parse(ctx, key, p, e, context, depth - 1);
+                    if (status == JsonStatus::absent_value)
+                        return JsonStatus::success;
+                    if (status != JsonStatus::success)
                         return status;
-                    if (!key.isString())
-                        return object_key_must_be_string;
+                    if (key.type_ != JsonType::String)
+                        return JsonStatus::object_key_must_be_string;
                     status = parse(ctx, value, p, e, COLON, depth - 1);
-                    if (status == absent_value)
-                        return object_missing_value;
-                    if (status != success)
+                    if (status == JsonStatus::absent_value)
+                        return JsonStatus::object_missing_value;
+                    if (status != JsonStatus::success)
                         return status;
                     json.object_value.emplace(std::move(key.string_value_),
                                               std::move(value));
@@ -1091,7 +1091,7 @@ Json::parse(const Context& ctx, Json& json, const char*& p, const char* e, int c
                     goto OnColonComma;
                 for (;;) {
                     if (p >= e)
-                        return unexpected_end_of_string;
+                        return JsonStatus::unexpected_end_of_string;
                     switch (kJsonStr[(c = *p++ & 255)]) {
 
                         case ASCII:
@@ -1099,13 +1099,13 @@ Json::parse(const Context& ctx, Json& json, const char*& p, const char* e, int c
                             break;
 
                         case DQUOTE:
-                            json.type_ = String;
+                            json.type_ = JsonType::String;
                             new (&json.string_value_) std::string(std::move(b));
-                            return success;
+                            return JsonStatus::success;
 
                         case BACKSLASH:
                             if (p >= e)
-                                return unexpected_end_of_string;
+                                return JsonStatus::unexpected_end_of_string;
                             switch ((c = *p++ & 255)) {
                                 case '"':
                                 case '/':
@@ -1134,12 +1134,12 @@ Json::parse(const Context& ctx, Json& json, const char*& p, const char* e, int c
                                         (B = kHexToInt[p[1] & 255]) != -1) { //
                                         c = A << 4 | B;
                                         if (!(0x20 <= c && c <= 0x7E))
-                                            return hex_escape_not_printable;
+                                            return JsonStatus::hex_escape_not_printable;
                                         p += 2;
                                         b += c;
                                         break;
                                     } else {
-                                        return invalid_hex_escape;
+                                        return JsonStatus::invalid_hex_escape;
                                     }
                                 case 'u':
                                     if (p + 4 <= e && //
@@ -1206,7 +1206,7 @@ Json::parse(const Context& ctx, Json& json, const char*& p, const char* e, int c
                                         }
                                         b.append(w, i);
                                     } else {
-                                        return invalid_unicode_escape;
+                                        return JsonStatus::invalid_unicode_escape;
                                     BadUnicode:
                                         // Echo invalid \uXXXX sequences
                                         // Rather than corrupting UTF-8!
@@ -1214,7 +1214,7 @@ Json::parse(const Context& ctx, Json& json, const char*& p, const char* e, int c
                                     }
                                     break;
                                 default:
-                                    return invalid_escape_character;
+                                    return JsonStatus::invalid_escape_character;
                             }
                             break;
 
@@ -1226,7 +1226,7 @@ Json::parse(const Context& ctx, Json& json, const char*& p, const char* e, int c
                                 p += 1;
                                 goto EncodeUtf8;
                             } else {
-                                return malformed_utf8;
+                                return JsonStatus::malformed_utf8;
                             }
 
                         case UTF8_3_E0:
@@ -1234,7 +1234,7 @@ Json::parse(const Context& ctx, Json& json, const char*& p, const char* e, int c
                                 (p[0] & 0377) < 0240 && //
                                 (p[0] & 0300) == 0200 && //
                                 (p[1] & 0300) == 0200) {
-                                return overlong_utf8_0x7ff;
+                                return JsonStatus::overlong_utf8_0x7ff;
                             }
                             // fallthrough
 
@@ -1249,7 +1249,7 @@ Json::parse(const Context& ctx, Json& json, const char*& p, const char* e, int c
                                 p += 2;
                                 goto EncodeUtf8;
                             } else {
-                                return malformed_utf8;
+                                return JsonStatus::malformed_utf8;
                             }
 
                         case UTF8_3_ED:
@@ -1272,9 +1272,9 @@ Json::parse(const Context& ctx, Json& json, const char*& p, const char* e, int c
                                     goto EncodeUtf8;
                                 } else if ((p[0] & 0300) == 0200 && //
                                            (p[1] & 0300) == 0200) { //
-                                    return utf16_surrogate_in_utf8;
+                                    return JsonStatus::utf16_surrogate_in_utf8;
                                 } else {
-                                    return malformed_utf8;
+                                    return JsonStatus::malformed_utf8;
                                 }
                             }
                             goto ThreeUtf8;
@@ -1286,7 +1286,7 @@ Json::parse(const Context& ctx, Json& json, const char*& p, const char* e, int c
                                   (uint_least32_t)(p[+0] & 0377) << 010 |
                                   (uint_least32_t)(p[-1] & 0377) << 000) &
                                  0xC0C0C000) == 0x80808000) {
-                                return overlong_utf8_0xffff;
+                                return JsonStatus::overlong_utf8_0xffff;
                             }
                             // fallthrough
                         case UTF8_4:
@@ -1307,22 +1307,22 @@ Json::parse(const Context& ctx, Json& json, const char*& p, const char* e, int c
                                     p += 3;
                                     goto EncodeUtf8;
                                 } else {
-                                    return utf8_exceeds_utf16_range;
+                                    return JsonStatus::utf8_exceeds_utf16_range;
                                 }
                             } else {
-                                return malformed_utf8;
+                                return JsonStatus::malformed_utf8;
                             }
 
                         case EVILUTF8:
                             if (p < e && (p[0] & 0300) == 0200)
-                                return overlong_ascii;
+                                return JsonStatus::overlong_ascii;
                             // fallthrough
                         case BADUTF8:
-                            return illegal_utf8_character;
+                            return JsonStatus::illegal_utf8_character;
                         case C0:
-                            return non_del_c0_control_code_in_string;
+                            return JsonStatus::non_del_c0_control_code_in_string;
                         case C1:
-                            return c1_control_code_in_string;
+                            return JsonStatus::c1_control_code_in_string;
                         default:
                             abort();
                     }
@@ -1331,96 +1331,96 @@ Json::parse(const Context& ctx, Json& json, const char*& p, const char* e, int c
         }
     }
     if (depth == DEPTH)
-        return absent_value;
-    return unexpected_eof;
+        return JsonStatus::absent_value;
+    return JsonStatus::unexpected_eof;
 }
 
-std::pair<Json::Status, Json>
-Json::parse(const Context& ctx, const char* s, size_t len)
+std::pair<JsonStatus, Json>
+Json::parse(const JsonContext& ctx, const char* s, size_t len)
 {
-    Json::Status s2;
-    std::pair<Json::Status, Json> res = { { }, { ctx } };
+    JsonStatus s2;
+    std::pair<JsonStatus, Json> res = { { }, { ctx } };
     const char* p = s;
     const char* e = s + len;
     res.first = parse(ctx, res.second, p, e, 0, DEPTH);
-    if (res.first == Json::success) {
+    if (res.first == JsonStatus::success) {
         Json j2(ctx);
         s2 = parse(ctx, j2, p, e, 0, DEPTH);
-        if (s2 != absent_value)
-            res.first = trailing_content;
+        if (s2 != JsonStatus::absent_value)
+            res.first = JsonStatus::trailing_content;
     }
     return res;
 }
 
 const char*
-Json::StatusToString(Json::Status status)
+Json::StatusToString(JsonStatus status)
 {
     switch (status) {
-        case success:
+        case JsonStatus::success:
             return "success";
-        case bad_double:
+        case JsonStatus::bad_double:
             return "bad_double";
-        case absent_value:
+        case JsonStatus::absent_value:
             return "absent_value";
-        case bad_negative:
+        case JsonStatus::bad_negative:
             return "bad_negative";
-        case bad_exponent:
+        case JsonStatus::bad_exponent:
             return "bad_exponent";
-        case missing_comma:
+        case JsonStatus::missing_comma:
             return "missing_comma";
-        case missing_colon:
+        case JsonStatus::missing_colon:
             return "missing_colon";
-        case malformed_utf8:
+        case JsonStatus::malformed_utf8:
             return "malformed_utf8";
-        case depth_exceeded:
+        case JsonStatus::depth_exceeded:
             return "depth_exceeded";
-        case stack_overflow:
+        case JsonStatus::stack_overflow:
             return "stack_overflow";
-        case unexpected_eof:
+        case JsonStatus::unexpected_eof:
             return "unexpected_eof";
-        case overlong_ascii:
+        case JsonStatus::overlong_ascii:
             return "overlong_ascii";
-        case unexpected_comma:
+        case JsonStatus::unexpected_comma:
             return "unexpected_comma";
-        case unexpected_colon:
+        case JsonStatus::unexpected_colon:
             return "unexpected_colon";
-        case unexpected_octal:
+        case JsonStatus::unexpected_octal:
             return "unexpected_octal";
-        case trailing_content:
+        case JsonStatus::trailing_content:
             return "trailing_content";
-        case illegal_character:
+        case JsonStatus::illegal_character:
             return "illegal_character";
-        case invalid_hex_escape:
+        case JsonStatus::invalid_hex_escape:
             return "invalid_hex_escape";
-        case overlong_utf8_0x7ff:
+        case JsonStatus::overlong_utf8_0x7ff:
             return "overlong_utf8_0x7ff";
-        case overlong_utf8_0xffff:
+        case JsonStatus::overlong_utf8_0xffff:
             return "overlong_utf8_0xffff";
-        case object_missing_value:
+        case JsonStatus::object_missing_value:
             return "object_missing_value";
-        case illegal_utf8_character:
+        case JsonStatus::illegal_utf8_character:
             return "illegal_utf8_character";
-        case invalid_unicode_escape:
+        case JsonStatus::invalid_unicode_escape:
             return "invalid_unicode_escape";
-        case utf16_surrogate_in_utf8:
+        case JsonStatus::utf16_surrogate_in_utf8:
             return "utf16_surrogate_in_utf8";
-        case unexpected_end_of_array:
+        case JsonStatus::unexpected_end_of_array:
             return "unexpected_end_of_array";
-        case hex_escape_not_printable:
+        case JsonStatus::hex_escape_not_printable:
             return "hex_escape_not_printable";
-        case invalid_escape_character:
+        case JsonStatus::invalid_escape_character:
             return "invalid_escape_character";
-        case utf8_exceeds_utf16_range:
+        case JsonStatus::utf8_exceeds_utf16_range:
             return "utf8_exceeds_utf16_range";
-        case unexpected_end_of_string:
+        case JsonStatus::unexpected_end_of_string:
             return "unexpected_end_of_string";
-        case unexpected_end_of_object:
+        case JsonStatus::unexpected_end_of_object:
             return "unexpected_end_of_object";
-        case object_key_must_be_string:
+        case JsonStatus::object_key_must_be_string:
             return "object_key_must_be_string";
-        case c1_control_code_in_string:
+        case JsonStatus::c1_control_code_in_string:
             return "c1_control_code_in_string";
-        case non_del_c0_control_code_in_string:
+        case JsonStatus::non_del_c0_control_code_in_string:
             return "non_del_c0_control_code_in_string";
         default:
             abort();

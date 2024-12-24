@@ -133,7 +133,7 @@ deep_test()
 void
 parse_test()
 {
-    std::pair<Json::Status, Json> res =
+    std::pair<JsonStatus, Json> res =
       Json::parse("{ \"content\":[[[0,10,20,3.14,40]]]}");
     if (res.first != Json::success)
         exit(3);
@@ -197,7 +197,7 @@ static const struct
 // https://github.com/nst/JSONTestSuite/
 static const struct
 {
-    Json::Status error;
+    JsonStatus error;
     std::string json;
 } kJsonTestSuite[] = {
     { Json::absent_value, "" },
@@ -359,7 +359,7 @@ void
 round_trip_test()
 {
     for (size_t i = 0; i < ARRAYLEN(kRoundTrip); ++i) {
-        std::pair<Json::Status, Json> res = Json::parse(kRoundTrip[i].before);
+        std::pair<JsonStatus, Json> res = Json::parse(kRoundTrip[i].before);
         if (res.first != Json::success) {
             printf(
               "error: Json::parse returned Json::%s but wanted Json::%s: %s\n",
@@ -383,7 +383,7 @@ void
 json_test_suite()
 {
     for (size_t i = 0; i < ARRAYLEN(kJsonTestSuite); ++i) {
-        std::pair<Json::Status, Json> res = Json::parse(kJsonTestSuite[i].json);
+        std::pair<JsonStatus, Json> res = Json::parse(kJsonTestSuite[i].json);
         if (res.first != kJsonTestSuite[i].error) {
             printf(
               "error: Json::parse returned Json::%s but wanted Json::%s: %s\n",

@@ -25,87 +25,105 @@ namespace jt {
 using MallocFunc = void*(*)(size_t size, size_t alignment, void * userdata);
 using FreeFunc = void(*)(void * ptr, void * userdata);
 
-struct Context
+struct JsonContext
 {
     MallocFunc malloc_aligned = nullptr;
     FreeFunc free_aligned = nullptr;
     void * userdata = nullptr;
 };
 
+struct JsonValue;
+
+struct StringView
+{
+    char * str;
+    size_t len; // Note: store the '\0' for easier compatibility with API requiring null-terminated strings
+};
+
+struct JsonArray
+{
+    JsonValue * ptr;
+    size_t len;
+};
+
+struct JsonHashTrie
+{
+    JsonHashTrie* children[4];
+    const char* key;
+    JsonValue* value;
+};
+
+enum class JsonType
+{
+    Null,
+    Bool,
+    Long,
+    Float,
+    Double,
+    String,
+    Array,
+    Object
+};
+
+struct JsonValue
+{
+    JsonType type;
+    union
+    {
+        bool bool_value;
+        float float_value;
+        double double_value;
+        long long long_value;
+        std::string string_value_;
+        //StringView string_value__; // TODO
+        std::vector<JsonValue> array_value;
+        std::map<std::string, JsonValue> object_value;
+    };
+    StringView string_value__ = { nullptr, 0 }; // TODO_REMOVE: tmp dev
+};
+
+enum class JsonStatus
+{
+    success,
+    bad_double,
+    absent_value,
+    bad_negative,
+    bad_exponent,
+    missing_comma,
+    missing_colon,
+    malformed_utf8,
+    depth_exceeded,
+    stack_overflow,
+    unexpected_eof,
+    overlong_ascii,
+    unexpected_comma,
+    unexpected_colon,
+    unexpected_octal,
+    trailing_content,
+    illegal_character,
+    invalid_hex_escape,
+    overlong_utf8_0x7ff,
+    overlong_utf8_0xffff,
+    object_missing_value,
+    illegal_utf8_character,
+    invalid_unicode_escape,
+    utf16_surrogate_in_utf8,
+    unexpected_end_of_array,
+    hex_escape_not_printable,
+    invalid_escape_character,
+    utf8_exceeds_utf16_range,
+    unexpected_end_of_string,
+    unexpected_end_of_object,
+    object_key_must_be_string,
+    c1_control_code_in_string,
+    non_del_c0_control_code_in_string,
+};
+
 class Json
 {
-  public:
-    enum Type
-    {
-        Null,
-        Bool,
-        Long,
-        Float,
-        Double,
-        String,
-        Array,
-        Object
-    };
-
-    enum Status
-    {
-        success,
-        bad_double,
-        absent_value,
-        bad_negative,
-        bad_exponent,
-        missing_comma,
-        missing_colon,
-        malformed_utf8,
-        depth_exceeded,
-        stack_overflow,
-        unexpected_eof,
-        overlong_ascii,
-        unexpected_comma,
-        unexpected_colon,
-        unexpected_octal,
-        trailing_content,
-        illegal_character,
-        invalid_hex_escape,
-        overlong_utf8_0x7ff,
-        overlong_utf8_0xffff,
-        object_missing_value,
-        illegal_utf8_character,
-        invalid_unicode_escape,
-        utf16_surrogate_in_utf8,
-        unexpected_end_of_array,
-        hex_escape_not_printable,
-        invalid_escape_character,
-        utf8_exceeds_utf16_range,
-        unexpected_end_of_string,
-        unexpected_end_of_object,
-        object_key_must_be_string,
-        c1_control_code_in_string,
-        non_del_c0_control_code_in_string,
-    };
-
-    struct StringView
-    {
-        char * str;
-        size_t len; // Note: store the '\0' for easier compatibility with API requiring null-terminated strings
-    };
-
-    struct ArrayView
-    {
-        Json * ptr;
-        size_t len;
-    };
-
-    struct HashTrie
-    {
-        HashTrie* children[4];
-        const char* key;
-        Json* value;
-    };
-
   private:
-    const Context & ctx_;
-    Type type_;
+    const JsonContext & ctx_;
+    JsonType type_;
     union
     {
         bool bool_value;
@@ -120,66 +138,67 @@ class Json
     StringView string_value__ = { nullptr, 0 }; // TODO_REMOVE: tmp dev
 
   public:
-    static const char* StatusToString(Status);
-    static std::pair<Status, Json> parse(const Context& ctx, const char* s, size_t len);
+    static const char* StatusToString(JsonStatus);
+    static std::pair<JsonStatus, Json> parse(const JsonContext& ctx, const char* s, size_t len);
 
     Json(const Json&);
     Json(Json&&) noexcept;
-    Json(const Context& ctx, unsigned long);
-    Json(const Context& ctx, unsigned long long);
-    Json(const Context& ctx, const char*);
+    Json(const JsonContext& ctx, unsigned long);
+    Json(const JsonContext& ctx, unsigned long long);
+    Json(const JsonContext& ctx, const char*);
     // TODO: remove
-    Json(const Context& ctx, const std::string&);
+    Json(const JsonContext& ctx, const std::string&);
     ~Json();
 
-    Json(const Context& ctx, const std::nullptr_t = nullptr) : ctx_(ctx), type_(Null)
+    Json(const JsonContext& ctx, const std::nullptr_t = nullptr) : ctx_(ctx), type_(JsonType::Null)
     {
     }
 
-    Json(const Context& ctx, bool value) : ctx_(ctx), type_(Bool), bool_value(value)
+    Json(const JsonContext& ctx, bool value) : ctx_(ctx), type_(JsonType::Bool), bool_value(value)
     {
     }
 
-    Json(const Context& ctx, int value) : ctx_(ctx), type_(Long), long_value(value)
+    Json(const JsonContext& ctx, int value) : ctx_(ctx), type_(JsonType::Long), long_value(value)
     {
     }
 
-    Json(const Context& ctx, float value) : ctx_(ctx), type_(Float), float_value(value)
+    Json(const JsonContext& ctx, float value) : ctx_(ctx), type_(JsonType::Float), float_value(value)
     {
     }
 
-    Json(const Context& ctx, unsigned value) : ctx_(ctx), type_(Long), long_value(value)
+    Json(const JsonContext& ctx, unsigned value) : ctx_(ctx), type_(JsonType::Long), long_value(value)
     {
     }
 
-    Json(const Context& ctx, long value) : ctx_(ctx), type_(Long), long_value(value)
+    Json(const JsonContext& ctx, long value) : ctx_(ctx), type_(JsonType::Long), long_value(value)
     {
     }
 
-    Json(const Context& ctx, long long value) : ctx_(ctx), type_(Long), long_value(value)
+    Json(const JsonContext& ctx, long long value) : ctx_(ctx), type_(JsonType::Long), long_value(value)
     {
     }
 
-    Json(const Context& ctx, double value) : ctx_(ctx), type_(Double), double_value(value)
+    Json(const JsonContext& ctx, double value) : ctx_(ctx), type_(JsonType::Double), double_value(value)
     {
     }
 
     // TODO: remove
-    Json(const Context& ctx, std::string&& value);
+    Json(const JsonContext& ctx, std::string&& value);
 
-    Type getType() const
+    JsonType getType() const
     {
         return type_;
     }
 
+    #if 0
     bool isNull() const
     {
-        return type_ == Null;
+        return type_ == JsonType::Null;
     }
 
     bool isBool() const
     {
-        return type_ == Bool;
+        return type_ == JsonType::Bool;
     }
 
     bool isNumber() const
@@ -189,33 +208,34 @@ class Json
 
     bool isLong() const
     {
-        return type_ == Long;
+        return type_ == JsonType::Long;
     }
 
     bool isFloat() const
     {
-        return type_ == Float;
+        return type_ == JsonType::Float;
     }
 
     bool isDouble() const
     {
-        return type_ == Double;
+        return type_ == JsonType::Double;
     }
 
     bool isString() const
     {
-        return type_ == String;
+        return type_ == JsonType::String;
     }
 
     bool isArray() const
     {
-        return type_ == Array;
+        return type_ == JsonType::Array;
     }
 
     bool isObject() const
     {
-        return type_ == Object;
+        return type_ == JsonType::Object;
     }
+    #endif
 
     // TODO: use bool getXXX(XXX& v) const instead of XXX getXXX() const + abort()
     bool getBool() const;
@@ -255,7 +275,7 @@ class Json
     void marshal(std::string&, bool, int) const;
     static void stringify(std::string&, const char* input);
     static void serialize(std::string&, const char* input);
-    static Status parse(const Context& ctx, Json&, const char*&, const char*, int, int);
+    static JsonStatus parse(const JsonContext& ctx, Json&, const char*&, const char*, int, int);
 };
 
 } // namespace jt
