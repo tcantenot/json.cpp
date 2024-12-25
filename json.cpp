@@ -929,11 +929,13 @@ static inline int EncodeUTF8(char w[4], int c)
     return i;
 }
 
-// Echo invalid \uXXXX sequences
-// Rather than corrupting UTF-8!
-static inline const char* BadUnicode()
+// Echo invalid \uXXXX sequences rather than corrupting UTF-8!
+static inline int SetBadUnicode(char w[4])
 {
-    return "\\u";
+    w[0] = '\\';
+    w[1] = '\\';
+    w[2] = 'u';
+    return 3;
 }
 
 JsonStatus
@@ -942,10 +944,10 @@ Json::parse(const JsonContext& ctx, Json& json, const char*& p, const char* e, i
     char w[4];
     long long x;
     const char* a;
-    int A, B, C, D, c, d, i, u;
+    int A, B, C, D, c, sign, i, u;
     if (!depth)
         return JsonStatus::depth_exceeded;
-    for (a = p, d = +1; p < e;) {
+    for (a = p, sign = +1; p < e;) {
         switch ((c = *p++ & 255)) {
             case ' ': // spaces
             case '\n':
@@ -1013,7 +1015,7 @@ Json::parse(const JsonContext& ctx, Json& json, const char*& p, const char* e, i
                 if (context & (COLON | COMMA | KEY))
                     return ReturnColonCommaKeyErrorStatus(context);
                 if (p < e && isdigit(*p)) {
-                    d = -1;
+                    sign = -1;
                     break;
                 } else {
                     return JsonStatus::bad_negative;
@@ -1064,11 +1066,11 @@ Json::parse(const JsonContext& ctx, Json& json, const char*& p, const char* e, i
                     return ReturnColonCommaKeyErrorStatus(context);
 
                 bool bUseDouble = false;
-                for (x = (c - '0') * d; p < e; ++p) {
+                for (x = (c - '0') * sign; p < e; ++p) {
                     c = *p & 255;
                     if (isdigit(c)) {
                         if (ckd_mul(&x, x, 10) ||
-                            ckd_add(&x, x, (c - '0') * d)) {
+                            ckd_add(&x, x, (c - '0') * sign)) {
                             bUseDouble = true;
                             break;
                         }
@@ -1156,216 +1158,202 @@ Json::parse(const JsonContext& ctx, Json& json, const char*& p, const char* e, i
                 if (context & (COLON | COMMA))
                     return ReturnColonCommaErrorStatus(context);
 
+                const auto append = [](std::string& s, const char* c, int num_chars) {
+                    s.append(c, num_chars);
+                };
+
+                // Decode UTF-8
                 // TODO: use ctx
                 std::string b;
-
+                const char* ptr = p;
                 bool bDone = false;
-                JsonStatus status = JsonStatus::success;
-                while(!bDone && (status == JsonStatus::success)) {
-                    if (p >= e) {
-                        status = JsonStatus::unexpected_end_of_string;
-                        break;
-                    }
-                    const char k = kJsonStr[(c = *p++ & 255)];
+                for(;;) {
+                    if (ptr >= e)
+                        return JsonStatus::unexpected_end_of_string;
+                    int num_chars = 1;
+                    const char k = kJsonStr[(c = *ptr++ & 255)];
                     switch (k) {
 
                         case ASCII:
-                            b += c;
+                            w[0] = (char)c;
                             break;
 
                         case DQUOTE:
-                            json.type_ = JsonType::String;
-                            new (&json.string_value_) std::string(std::move(b));
                             bDone = true;
                             break;
 
                         case BACKSLASH:
-                            if (p >= e) {
-                                status = JsonStatus::unexpected_end_of_string;
-                                break;
-                            }
-                            switch ((c = *p++ & 255)) {
+                            if (ptr >= e)
+                                return JsonStatus::unexpected_end_of_string;
+                            switch ((c = *ptr++ & 255)) {
                                 case '"':
                                 case '/':
                                 case '\\':
-                                    b += c;
+                                    w[0] = (char)c;
                                     break;
                                 case 'b':
-                                    b += '\b';
+                                    w[0] = '\b';
                                     break;
                                 case 'f':
-                                    b += '\f';
+                                    w[0] = '\f';
                                     break;
                                 case 'n':
-                                    b += '\n';
+                                    w[0] = '\n';
                                     break;
                                 case 'r':
-                                    b += '\r';
+                                    w[0] = '\r';
                                     break;
                                 case 't':
-                                    b += '\t';
+                                    w[0] = '\t';
                                     break;
                                 case 'x':
-                                    if (p + 2 <= e && //
-                                        (A = kHexToInt[p[0] & 255]) !=
+                                    if (ptr + 2 <= e && //
+                                        (A = kHexToInt[ptr[0] & 255]) !=
                                           -1 && // HEX
-                                        (B = kHexToInt[p[1] & 255]) != -1) { //
+                                        (B = kHexToInt[ptr[1] & 255]) != -1) { //
                                         c = A << 4 | B;
                                         if (!(0x20 <= c && c <= 0x7E)) {
-                                            status = JsonStatus::hex_escape_not_printable;
+                                            return JsonStatus::hex_escape_not_printable;
                                             break;
                                         }
-                                        p += 2;
-                                        b += c;
+                                        ptr += 2;
+                                        w[0] = (char)c;
                                         break;
                                     } else {
-                                        status = JsonStatus::invalid_hex_escape;
+                                        return JsonStatus::invalid_hex_escape;
                                         break;
                                     }
                                 case 'u':
-                                    if (p + 4 <= e && //
-                                        (A = kHexToInt[p[0] & 255]) != -1 && //
-                                        (B = kHexToInt[p[1] & 255]) !=
+                                    if (ptr + 4 <= e && //
+                                        (A = kHexToInt[ptr[0] & 255]) != -1 && //
+                                        (B = kHexToInt[ptr[1] & 255]) !=
                                           -1 && // UCS-2
-                                        (C = kHexToInt[p[2] & 255]) != -1 && //
-                                        (D = kHexToInt[p[3] & 255]) != -1) { //
+                                        (C = kHexToInt[ptr[2] & 255]) != -1 && //
+                                        (D = kHexToInt[ptr[3] & 255]) != -1) { //
                                         c = A << 12 | B << 8 | C << 4 | D;
                                         if (!IsSurrogate(c)) {
-                                            p += 4;
-                                            i = EncodeUTF8(w, c);
-                                            b.append(w, i);
+                                            ptr += 4;
+                                            num_chars = EncodeUTF8(w, c);
                                         } else if (IsHighSurrogate(c)) {
-                                            if (p + 4 + 6 <= e && //
-                                                p[4] == '\\' && //
-                                                p[5] == 'u' && //
-                                                (A = kHexToInt[p[6] & 255]) !=
+                                            if (ptr + 4 + 6 <= e && //
+                                                ptr[4] == '\\' && //
+                                                ptr[5] == 'u' && //
+                                                (A = kHexToInt[ptr[6] & 255]) !=
                                                   -1 && // UTF-16
-                                                (B = kHexToInt[p[7] & 255]) !=
+                                                (B = kHexToInt[ptr[7] & 255]) !=
                                                   -1 && //
-                                                (C = kHexToInt[p[8] & 255]) !=
+                                                (C = kHexToInt[ptr[8] & 255]) !=
                                                   -1 && //
-                                                (D = kHexToInt[p[9] & 255]) !=
+                                                (D = kHexToInt[ptr[9] & 255]) !=
                                                   -1) { //
                                                 u =
                                                   A << 12 | B << 8 | C << 4 | D;
                                                 if (IsLowSurrogate(u)) {
-                                                    p += 4 + 6;
+                                                    ptr += 4 + 6;
                                                     c = MergeUtf16(c, u);
-                                                    i = EncodeUTF8(w, c);
-                                                    b.append(w, i);
+                                                    num_chars = EncodeUTF8(w, c);
                                                 } else {
-                                                    b += BadUnicode();
+                                                    num_chars = SetBadUnicode(w);
                                                     break;
                                                 }
                                             } else {
-                                                b += BadUnicode();
+                                                num_chars = SetBadUnicode(w);
                                                 break;
                                             }
                                         } else {
-                                            b += BadUnicode();
+                                            num_chars = SetBadUnicode(w);
                                             break;
                                         }
                                     } else {
-                                        status = JsonStatus::invalid_unicode_escape;
-                                        break;
+                                        return JsonStatus::invalid_unicode_escape;
                                     }
                                     break;
                                 default:
-                                    status = JsonStatus::invalid_escape_character;
-                                    break;
+                                    return JsonStatus::invalid_escape_character;
                             }
                             break;
 
                         case UTF8_2:
-                            if (p < e && //
-                                (p[0] & 0300) == 0200) { //
+                            if (ptr < e && //
+                                (ptr[0] & 0300) == 0200) { //
                                 c = (c & 037) << 6 | //
-                                    (p[0] & 077); //
-                                p += 1;
-                                i = EncodeUTF8(w, c);
-                                b.append(w, i);
+                                    (ptr[0] & 077); //
+                                ptr += 1;
+                                num_chars = EncodeUTF8(w, c);
                                 break;
                             } else {
-                                status = JsonStatus::malformed_utf8;
-                                break;
+                                return JsonStatus::malformed_utf8;
                             }
 
                         case UTF8_3_E0:
                         case UTF8_3_ED:
                             if(k == UTF8_3_E0) {
-                                if (p + 2 <= e && //
-                                    (p[0] & 0377) < 0240 && //
-                                    (p[0] & 0300) == 0200 && //
-                                    (p[1] & 0300) == 0200) {
-                                    status = JsonStatus::overlong_utf8_0x7ff;
-                                    break;
+                                if (ptr + 2 <= e && //
+                                    (ptr[0] & 0377) < 0240 && //
+                                    (ptr[0] & 0300) == 0200 && //
+                                    (ptr[1] & 0300) == 0200) {
+                                    return JsonStatus::overlong_utf8_0x7ff;
                                 }
                             } else { // k == UTF8_3_ED
-                                if (p + 2 <= e && //
-                                (p[0] & 0377) >= 0240) { //
-                                    if (p + 5 <= e && //
-                                        (p[0] & 0377) >= 0256 && //
-                                        (p[1] & 0300) == 0200 && //
-                                        (p[2] & 0377) == 0355 && //
-                                        (p[3] & 0377) >= 0260 && //
-                                        (p[4] & 0300) == 0200) { //
+                                if (ptr + 2 <= e && //
+                                (ptr[0] & 0377) >= 0240) { //
+                                    if (ptr + 5 <= e && //
+                                        (ptr[0] & 0377) >= 0256 && //
+                                        (ptr[1] & 0300) == 0200 && //
+                                        (ptr[2] & 0377) == 0355 && //
+                                        (ptr[3] & 0377) >= 0260 && //
+                                        (ptr[4] & 0300) == 0200) { //
                                         A = (0355 & 017) << 12 | // CESU-8
-                                            (p[0] & 077) << 6 | //
-                                            (p[1] & 077); //
+                                            (ptr[0] & 077) << 6 | //
+                                            (ptr[1] & 077); //
                                         B = (0355 & 017) << 12 | //
-                                            (p[3] & 077) << 6 | //
-                                            (p[4] & 077); //
+                                            (ptr[3] & 077) << 6 | //
+                                            (ptr[4] & 077); //
                                         c = ((A - 0xDB80) << 10) + //
                                             ((B - 0xDC00) + 0x10000); //
-                                        i = EncodeUTF8(w, c);
-                                        b.append(w, i);
+                                        num_chars = EncodeUTF8(w, c);
                                         break;
-                                    } else if ((p[0] & 0300) == 0200 && //
-                                               (p[1] & 0300) == 0200) { //
-                                        status = JsonStatus::utf16_surrogate_in_utf8;
-                                        break;
+                                    } else if ((ptr[0] & 0300) == 0200 && //
+                                               (ptr[1] & 0300) == 0200) { //
+                                        return JsonStatus::utf16_surrogate_in_utf8;
                                     } else {
-                                        status = JsonStatus::malformed_utf8;
-                                        break;
+                                        return JsonStatus::malformed_utf8;
                                     }
                                 }
                             }
                             // fallthrough
 
                         case UTF8_3:
-                            if (p + 2 <= e && //
-                                (p[0] & 0300) == 0200 && //
-                                (p[1] & 0300) == 0200) { //
+                            if (ptr + 2 <= e && //
+                                (ptr[0] & 0300) == 0200 && //
+                                (ptr[1] & 0300) == 0200) { //
                                 c = (c & 017) << 12 | //
-                                    (p[0] & 077) << 6 | //
-                                    (p[1] & 077); //
-                                p += 2;
-                                i = EncodeUTF8(w, c);
-                                b.append(w, i);
+                                    (ptr[0] & 077) << 6 | //
+                                    (ptr[1] & 077); //
+                                ptr += 2;
+                                num_chars = EncodeUTF8(w, c);
                                 break;
                             } else {
-                                status = JsonStatus::malformed_utf8;
-                                break;
+                                return JsonStatus::malformed_utf8;
                             }
 
                         case UTF8_4_F0:
-                            if (p + 3 <= e && (p[0] & 0377) < 0220 &&
-                                (((uint_least32_t)(p[+2] & 0377) << 030 |
-                                  (uint_least32_t)(p[+1] & 0377) << 020 |
-                                  (uint_least32_t)(p[+0] & 0377) << 010 |
-                                  (uint_least32_t)(p[-1] & 0377) << 000) &
+                            if (ptr + 3 <= e && (ptr[0] & 0377) < 0220 &&
+                                (((uint_least32_t)(ptr[+2] & 0377) << 030 |
+                                  (uint_least32_t)(ptr[+1] & 0377) << 020 |
+                                  (uint_least32_t)(ptr[+0] & 0377) << 010 |
+                                  (uint_least32_t)(ptr[-1] & 0377) << 000) &
                                  0xC0C0C000) == 0x80808000) {
-                                status = JsonStatus::overlong_utf8_0xffff;
-                                break;
+                                return JsonStatus::overlong_utf8_0xffff;
                             }
                             // fallthrough
                         case UTF8_4:
-                            if (p + 3 <= e && //
+                            if (ptr + 3 <= e && //
                                 ((A =
-                                    ((uint_least32_t)(p[+2] & 0377) << 030 | //
-                                     (uint_least32_t)(p[+1] & 0377) << 020 | //
-                                     (uint_least32_t)(p[+0] & 0377) << 010 | //
-                                     (uint_least32_t)(p[-1] & 0377)
+                                    ((uint_least32_t)(ptr[+2] & 0377) << 030 | //
+                                     (uint_least32_t)(ptr[+1] & 0377) << 020 | //
+                                     (uint_least32_t)(ptr[+0] & 0377) << 010 | //
+                                     (uint_least32_t)(ptr[-1] & 0377)
                                        << 000)) & //
                                  0xC0C0C000) == 0x80808000) { //
                                 A = (A & 7) << 18 | //
@@ -1374,40 +1362,39 @@ Json::parse(const JsonContext& ctx, Json& json, const char*& p, const char* e, i
                                     (A & (077 << 030)) >> 030; //
                                 if (A <= 0x10FFFF) {
                                     c = A;
-                                    p += 3;
-                                    i = EncodeUTF8(w, c);
-                                    b.append(w, i);
+                                    ptr += 3;
+                                    num_chars = EncodeUTF8(w, c);
                                     break;
                                 } else {
-                                    status = JsonStatus::utf8_exceeds_utf16_range;
-                                    break;
+                                    return JsonStatus::utf8_exceeds_utf16_range;
                                 }
                             } else {
-                                status = JsonStatus::malformed_utf8;
-                                break;
+                                return JsonStatus::malformed_utf8;
                             }
 
                         case EVILUTF8:
-                            if (p < e && (p[0] & 0300) == 0200) {
-                                status = JsonStatus::overlong_ascii;
-                                break;
-                            }
+                            if (ptr < e && (ptr[0] & 0300) == 0200)
+                                return JsonStatus::overlong_ascii;
                             // fallthrough
                         case BADUTF8:
-                            status = JsonStatus::illegal_utf8_character;
-                            break;
+                            return JsonStatus::illegal_utf8_character;
                         case C0:
-                            status = JsonStatus::non_del_c0_control_code_in_string;
-                            break;
+                            return JsonStatus::non_del_c0_control_code_in_string;
                         case C1:
-                            status = JsonStatus::c1_control_code_in_string;
-                            break;
+                            return JsonStatus::c1_control_code_in_string;
                         default:
-                            status = JsonStatus::internal_error_unreachable_code;
-                            break;
+                            return JsonStatus::internal_error_unreachable_code;
+                    }
+
+                    if(bDone) {
+                        p = ptr;
+                        json.type_ = JsonType::String;
+                        new (&json.string_value_) std::string(std::move(b));
+                        return JsonStatus::success;
+                    } else {
+                        append(b, w, num_chars);
                     }
                 }
-                return status;
             }
         }
     }
